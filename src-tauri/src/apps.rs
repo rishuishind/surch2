@@ -42,8 +42,8 @@ fn desktop_dirs() -> Vec<PathBuf> {
 
 /// Parse a .desktop file into an AppEntry
 fn parse_desktop_file(path: &PathBuf) -> Option<AppEntry> {
-    let content = fs::read_to_string(path).ok()?;
-    let entry = freedesktop_entry_parser::parse_entry(&content);
+    // freedesktop_entry_parser::parse_entry takes a file path
+    let entry = freedesktop_entry_parser::parse_entry(path.to_str()?).ok()?;
 
     let section = entry.section("Desktop Entry");
 

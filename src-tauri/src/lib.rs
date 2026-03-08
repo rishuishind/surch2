@@ -248,9 +248,9 @@ pub fn run() {
 
             let main_window = app.get_webview_window("main").unwrap();
 
-            // Toggle visibility on Super+Space
+            // Toggle visibility on Alt+Space (not Super+Space which i3 uses)
             let window_clone = main_window.clone();
-            app.global_shortcut().on_shortcut("super+space", move |_app, _shortcut, _event| {
+            match app.global_shortcut().on_shortcut("alt+space", move |_app, _shortcut, _event| {
                 if let Ok(visible) = window_clone.is_visible() {
                     if visible {
                         let _ = window_clone.hide();
@@ -259,9 +259,14 @@ pub fn run() {
                         let _ = window_clone.set_focus();
                     }
                 }
-            })?;
+            }) {
+                Ok(_) => println!("[Surch2] Global shortcut registered: Alt+Space"),
+                Err(e) => {
+                    eprintln!("[Surch2] Warning: Could not register Alt+Space shortcut: {}", e);
+                    eprintln!("[Surch2] You can still use the app, just launch it manually.");
+                }
+            }
 
-            println!("[Surch2] Global shortcut registered: Super+Space");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
