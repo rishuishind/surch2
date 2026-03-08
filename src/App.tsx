@@ -3,19 +3,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
-interface AppEntry {
-  name: string;
-  exec: string;
+interface SearchResultItem {
+  id: string;
+  title: string;
+  subtitle: string | null;
   icon: string | null;
   icon_data: string | null;
-  description: string | null;
-  categories: string | null;
-  desktop_file: string;
+  item_type: string;
+  action_data: string;
 }
 
 function App() {
+  const [viewMode, setViewMode] = createSignal<"main" | "clipboard">("main");
   const [query, setQuery] = createSignal("");
-  const [results, setResults] = createSignal<AppEntry[]>([]);
+  const [results, setResults] = createSignal<SearchResultItem[]>([]);
   const [activeIndex, setActiveIndex] = createSignal(0);
   const [loading, setLoading] = createSignal(true);
   const [mathResult, setMathResult] = createSignal<string | null>(null);
@@ -24,11 +25,19 @@ function App() {
   let inputRef!: HTMLInputElement;
   let resultsRef!: HTMLDivElement;
 
-  // Search applications
-  async function searchApps(q: string) {
+  // Search items
+  async function searchItems(q: string) {
     try {
-      const apps = await invoke<AppEntry[]>("search_apps", { query: q });
-      setResults(apps);
+      const mode = viewMode();
+      let items: SearchResultItem[] = [];
+
+      if (mode === "main") {
+        items = await invoke<SearchResultItem[]>("search_items", { query: q });
+      } else if (mode === "clipboard") {
+        items = await invoke<SearchResultItem[]>("search_clipboard_history", { query: q });
+      }
+
+      setResults(items);
       setActiveIndex(0);
     } catch (e) {
       console.error("Search failed:", e);
@@ -37,7 +46,7 @@ function App() {
 
   // Try evaluating math expression
   async function tryMath(q: string) {
-    if (!q || q.length < 2) {
+    if (viewMode() !== "main" || !q || q.length < 2) {
       setMathResult(null);
       return;
     }
@@ -60,15 +69,28 @@ function App() {
   // Handle input changes
   createEffect(() => {
     const q = query();
-    searchApps(q);
+    searchItems(q);
     tryMath(q);
   });
 
-  // Launch an app
-  async function launchApp(app: AppEntry) {
+  // Re-run search when mode changes too
+  createEffect(() => {
+    searchItems(query());
+  });
+
+  // Execute an item
+  async function executeItem(item: SearchResultItem) {
+    if (item.action_data === "switch_view_clipboard") {
+      setViewMode("clipboard");
+      setQuery("");
+      setMathResult(null);
+      inputRef?.focus();
+      return;
+    }
+
     try {
-      await invoke("launch_app", { exec: app.exec });
-      // Hide window after launch
+      await invoke("execute_item", { item });
+      // Hide window after execution
       const appWindow = getCurrentWindow();
       await appWindow.hide();
       setQuery("");
@@ -95,7 +117,7 @@ function App() {
       case "Enter":
         e.preventDefault();
         if (items[activeIndex()]) {
-          launchApp(items[activeIndex()]);
+          executeItem(items[activeIndex()]);
         }
         break;
       case "Escape":
@@ -103,6 +125,8 @@ function App() {
         if (query()) {
           setQuery("");
           inputRef.value = "";
+        } else if (viewMode() !== "main") {
+          setViewMode("main");
         } else {
           getCurrentWindow().hide();
         }
@@ -130,11 +154,11 @@ function App() {
     // Focus input
     inputRef?.focus();
 
-    // Load initial apps
+    // Load initial items
     try {
-      const count = await invoke<number>("refresh_apps");
+      const count = await invoke<number>("refresh_items");
       setAppCount(count);
-      await searchApps("");
+      await searchItems("");
     } catch (e) {
       console.error("Init failed:", e);
     }
@@ -156,15 +180,23 @@ function App() {
     <div class="launcher" onKeyDown={handleKeyDown}>
       {/* Search Bar */}
       <div class="search-container">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
+        <Show
+          when={viewMode() === "clipboard"}
+          fallback={
+            <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="11" cy="11" r="8" />
+              <line x1="21" y1="21" x2="16.65" y2="16.65" />
+            </svg>
+          }
+        >
+          <div class="view-badge">Clipboard History</div>
+        </Show>
+
         <input
           ref={inputRef!}
           class="search-input"
           type="text"
-          placeholder="Search apps, commands, or type math..."
+          placeholder={viewMode() === "main" ? "Search apps, commands, or type math..." : "Search clipboard..."}
           value={query()}
           onInput={(e) => setQuery(e.currentTarget.value)}
           autofocus
@@ -213,39 +245,43 @@ function App() {
 
         <Show when={!loading() && results().length > 0}>
           <div class="results-section-label">
-            {query() ? "Search Results" : "Applications"}
+            {query()
+              ? "Search Results"
+              : viewMode() === "clipboard"
+                ? "Recent Clipboard Entries"
+                : "Applications & Commands"}
           </div>
           <For each={results()}>
-            {(app, index) => (
+            {(item, index) => (
               <div
                 class={`result-item ${index() === activeIndex() ? "active" : ""}`}
-                onClick={() => launchApp(app)}
+                onClick={() => executeItem(item)}
                 onMouseEnter={() => setActiveIndex(index())}
               >
                 <div class="result-icon-wrapper">
                   <Show
-                    when={app.icon_data}
+                    when={item.icon_data}
                     fallback={
                       <div class="result-icon-fallback">
-                        {app.name.charAt(0).toUpperCase()}
+                        {item.title.charAt(0).toUpperCase()}
                       </div>
                     }
                   >
                     <img
-                      src={app.icon_data!}
-                      alt={app.name}
+                      src={item.icon_data!}
+                      alt={item.title}
                       loading="lazy"
                     />
                   </Show>
                 </div>
                 <div class="result-content">
-                  <div class="result-name">{app.name}</div>
-                  <Show when={app.description}>
-                    <div class="result-description">{app.description}</div>
+                  <div class="result-name">{item.title}</div>
+                  <Show when={item.subtitle}>
+                    <div class="result-description">{item.subtitle}</div>
                   </Show>
                 </div>
                 <div class="result-action">
-                  <span class="result-action-text">Open</span>
+                  <span class="result-action-text">Select</span>
                   <span class="kbd">↵</span>
                 </div>
               </div>
