@@ -62,7 +62,11 @@ X-GNOME-Autostart-enabled=true
 Name=Surch2
 Comment=Launch Surch2 in background for global hotkey support
 EOF
-echo "✅ Enabled autostart on boot (for Alt+Space hotkey) at $AUTOSTART_DIR/$APP_NAME.desktop"
+# 5. Fix GNOME Alt+Space conflict
+if command -v gsettings &> /dev/null; then
+    echo "[5/5] Releasing Alt+Space shortcut from GNOME (if applicable)..."
+    gsettings set org.gnome.desktop.wm.keybindings activate-window-menu "['']" || true
+fi
 
 echo "====================================="
 echo " 🎉 Installation Complete! "
@@ -70,6 +74,6 @@ echo "====================================="
 echo "Important: Make sure $INSTALL_DIR is in your system's PATH."
 echo ""
 echo "To start Surch2 right now, run:"
-echo "  $APP_NAME &"
+echo "  $INSTALL_DIR/$APP_NAME &"
 echo ""
 echo "Or find it in your application menu. Once running in the background, press Alt+Space to summon!"
