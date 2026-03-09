@@ -3,32 +3,46 @@ import { invoke } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import "./App.css";
 
-interface AppEntry {
-  name: string;
-  exec: string;
+interface SearchResultItem {
+  id: string;
+  title: string;
+  subtitle: string | null;
   icon: string | null;
   icon_data: string | null;
-  description: string | null;
-  categories: string | null;
-  desktop_file: string;
+  item_type: string;
+  action_data: string;
 }
 
 function App() {
+  const [viewMode, setViewMode] = createSignal<"main" | "clipboard" | "create_snippet">("main");
   const [query, setQuery] = createSignal("");
-  const [results, setResults] = createSignal<AppEntry[]>([]);
+  const [results, setResults] = createSignal<SearchResultItem[]>([]);
   const [activeIndex, setActiveIndex] = createSignal(0);
   const [loading, setLoading] = createSignal(true);
   const [mathResult, setMathResult] = createSignal<string | null>(null);
   const [appCount, setAppCount] = createSignal(0);
 
+  // Snippet Form State
+  const [snippetTitle, setSnippetTitle] = createSignal("");
+  const [snippetContent, setSnippetContent] = createSignal("");
+  const [snippetKeyword, setSnippetKeyword] = createSignal("");
+
   let inputRef!: HTMLInputElement;
   let resultsRef!: HTMLDivElement;
 
-  // Search applications
-  async function searchApps(q: string) {
+  // Search items
+  async function searchItems(q: string) {
     try {
-      const apps = await invoke<AppEntry[]>("search_apps", { query: q });
-      setResults(apps);
+      const mode = viewMode();
+      let items: SearchResultItem[] = [];
+
+      if (mode === "main") {
+        items = await invoke<SearchResultItem[]>("search_items", { query: q });
+      } else if (mode === "clipboard") {
+        items = await invoke<SearchResultItem[]>("search_clipboard_history", { query: q });
+      }
+
+      setResults(items);
       setActiveIndex(0);
     } catch (e) {
       console.error("Search failed:", e);
@@ -37,7 +51,7 @@ function App() {
 
   // Try evaluating math expression
   async function tryMath(q: string) {
-    if (!q || q.length < 2) {
+    if (viewMode() !== "main" || !q || q.length < 2) {
       setMathResult(null);
       return;
     }
@@ -60,15 +74,38 @@ function App() {
   // Handle input changes
   createEffect(() => {
     const q = query();
-    searchApps(q);
+    searchItems(q);
     tryMath(q);
   });
 
-  // Launch an app
-  async function launchApp(app: AppEntry) {
+  // Re-run search when mode changes too
+  createEffect(() => {
+    searchItems(query());
+  });
+
+  // Execute an item
+  async function executeItem(item: SearchResultItem) {
+    if (item.action_data === "switch_view_clipboard") {
+      setViewMode("clipboard");
+      setQuery("");
+      setMathResult(null);
+      inputRef?.focus();
+      return;
+    }
+
+    if (item.action_data === "switch_view_create_snippet") {
+      setViewMode("create_snippet");
+      setQuery("");
+      setMathResult(null);
+      setSnippetTitle("");
+      setSnippetContent("");
+      setSnippetKeyword("");
+      return;
+    }
+
     try {
-      await invoke("launch_app", { exec: app.exec });
-      // Hide window after launch
+      await invoke("execute_item", { item });
+      // Hide window after execution
       const appWindow = getCurrentWindow();
       await appWindow.hide();
       setQuery("");
@@ -79,6 +116,16 @@ function App() {
 
   // Keyboard navigation
   function handleKeyDown(e: KeyboardEvent) {
+    if (viewMode() === "create_snippet") {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setViewMode("main");
+        inputRef?.focus();
+      }
+      // Allow default interaction in form
+      return;
+    }
+
     const items = results();
 
     switch (e.key) {
@@ -95,7 +142,7 @@ function App() {
       case "Enter":
         e.preventDefault();
         if (items[activeIndex()]) {
-          launchApp(items[activeIndex()]);
+          executeItem(items[activeIndex()]);
         }
         break;
       case "Escape":
@@ -103,6 +150,8 @@ function App() {
         if (query()) {
           setQuery("");
           inputRef.value = "";
+        } else if (viewMode() !== "main") {
+          setViewMode("main");
         } else {
           getCurrentWindow().hide();
         }
@@ -123,6 +172,25 @@ function App() {
     });
   }
 
+  async function submitSnippet() {
+    if (!snippetTitle() || !snippetContent()) return;
+
+    try {
+      await invoke("save_snippet", {
+        title: snippetTitle(),
+        content: snippetContent(),
+        keyword: snippetKeyword() ? snippetKeyword() : null
+      });
+      // Refresh items to include new snippet
+      await invoke("refresh_items");
+      // Go back to main view
+      setViewMode("main");
+      inputRef?.focus();
+    } catch (e) {
+      console.error("Failed to save snippet", e);
+    }
+  }
+
   // Initialize
   onMount(async () => {
     setLoading(true);
@@ -130,11 +198,11 @@ function App() {
     // Focus input
     inputRef?.focus();
 
-    // Load initial apps
+    // Load initial items
     try {
-      const count = await invoke<number>("refresh_apps");
+      const count = await invoke<number>("refresh_items");
       setAppCount(count);
-      await searchApps("");
+      await searchItems("");
     } catch (e) {
       console.error("Init failed:", e);
     }
@@ -156,15 +224,31 @@ function App() {
     <div class="launcher" onKeyDown={handleKeyDown}>
       {/* Search Bar */}
       <div class="search-container">
-        <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="11" cy="11" r="8" />
-          <line x1="21" y1="21" x2="16.65" y2="16.65" />
-        </svg>
+        <Show
+          when={viewMode() === "clipboard"}
+        >
+          <div class="view-badge">Clipboard History</div>
+        </Show>
+        <Show
+          when={viewMode() === "create_snippet"}
+        >
+          <div class="view-badge">Create Snippet</div>
+        </Show>
+
+        <Show
+          when={viewMode() !== "clipboard" && viewMode() !== "create_snippet"}
+        >
+          <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+        </Show>
+
         <input
           ref={inputRef!}
           class="search-input"
           type="text"
-          placeholder="Search apps, commands, or type math..."
+          placeholder={viewMode() === "main" ? "Search apps, commands, or type math..." : viewMode() === "clipboard" ? "Search clipboard..." : "Type anything..."}
           value={query()}
           onInput={(e) => setQuery(e.currentTarget.value)}
           autofocus
@@ -189,9 +273,55 @@ function App() {
         </div>
       </Show>
 
-      {/* Results */}
+      {/* Results or Form */}
       <div class="results-container" ref={resultsRef!}>
-        <Show when={loading()}>
+        <Show when={viewMode() === "create_snippet"}>
+          <div class="snippet-form">
+            <div class="form-group">
+              <label>Title</label>
+              <input
+                type="text"
+                class="form-input"
+                placeholder="e.g. My Email"
+                value={snippetTitle()}
+                onInput={(e) => setSnippetTitle(e.currentTarget.value)}
+                autofocus
+              />
+            </div>
+            <div class="form-group">
+              <label>Content (Text to paste)</label>
+              <textarea
+                class="form-input form-textarea"
+                placeholder="hello@example.com"
+                value={snippetContent()}
+                onInput={(e) => setSnippetContent(e.currentTarget.value)}
+                rows={4}
+              />
+            </div>
+            <div class="form-group">
+              <label>Keyword (Optional)</label>
+              <input
+                type="text"
+                class="form-input"
+                placeholder="e.g. @@mail"
+                value={snippetKeyword()}
+                onInput={(e) => setSnippetKeyword(e.currentTarget.value)}
+              />
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-secondary" onClick={() => { setViewMode("main"); inputRef?.focus(); }}>Cancel</button>
+              <button
+                class="btn btn-primary"
+                disabled={!snippetTitle() || !snippetContent()}
+                onClick={submitSnippet}
+              >
+                Save Snippet
+              </button>
+            </div>
+          </div>
+        </Show>
+
+        <Show when={viewMode() !== "create_snippet" && loading()}>
           <div class="loading-dots">
             <div class="loading-dot" />
             <div class="loading-dot" />
@@ -199,7 +329,7 @@ function App() {
           </div>
         </Show>
 
-        <Show when={!loading() && results().length === 0 && query()}>
+        <Show when={viewMode() !== "create_snippet" && !loading() && results().length === 0 && query()}>
           <div class="empty-state">
             <svg class="empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
               <circle cx="12" cy="12" r="10" />
@@ -211,41 +341,53 @@ function App() {
           </div>
         </Show>
 
-        <Show when={!loading() && results().length > 0}>
+        <Show when={viewMode() !== "create_snippet" && !loading() && results().length > 0}>
           <div class="results-section-label">
-            {query() ? "Search Results" : "Applications"}
+            {query()
+              ? "Search Results"
+              : viewMode() === "clipboard"
+                ? "Recent Clipboard Entries"
+                : "Applications & Commands"}
           </div>
           <For each={results()}>
-            {(app, index) => (
+            {(item, index) => (
               <div
                 class={`result-item ${index() === activeIndex() ? "active" : ""}`}
-                onClick={() => launchApp(app)}
+                onClick={() => executeItem(item)}
                 onMouseEnter={() => setActiveIndex(index())}
               >
                 <div class="result-icon-wrapper">
-                  <Show
-                    when={app.icon_data}
-                    fallback={
-                      <div class="result-icon-fallback">
-                        {app.name.charAt(0).toUpperCase()}
-                      </div>
-                    }
-                  >
-                    <img
-                      src={app.icon_data!}
-                      alt={app.name}
-                      loading="lazy"
-                    />
+                  <Show when={item.item_type === "snippet"}>
+                    <svg class="result-icon-svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width: 18px; height: 18px; color: var(--accent-amber);">
+                      <polyline points="16 18 22 12 16 6"></polyline>
+                      <polyline points="8 6 2 12 8 18"></polyline>
+                    </svg>
+                  </Show>
+                  <Show when={item.item_type !== "snippet"}>
+                    <Show
+                      when={item.icon_data}
+                      fallback={
+                        <div class="result-icon-fallback">
+                          {item.title.charAt(0).toUpperCase()}
+                        </div>
+                      }
+                    >
+                      <img
+                        src={item.icon_data!}
+                        alt={item.title}
+                        loading="lazy"
+                      />
+                    </Show>
                   </Show>
                 </div>
                 <div class="result-content">
-                  <div class="result-name">{app.name}</div>
-                  <Show when={app.description}>
-                    <div class="result-description">{app.description}</div>
+                  <div class="result-name">{item.title}</div>
+                  <Show when={item.subtitle}>
+                    <div class="result-description">{item.subtitle}</div>
                   </Show>
                 </div>
                 <div class="result-action">
-                  <span class="result-action-text">Open</span>
+                  <span class="result-action-text">Select</span>
                   <span class="kbd">↵</span>
                 </div>
               </div>
@@ -255,27 +397,29 @@ function App() {
       </div>
 
       {/* Status Bar */}
-      <div class="status-bar">
-        <div class="status-left">
-          <span class="status-text">
-            {appCount() > 0 ? `${appCount()} apps indexed` : "Loading..."}
-          </span>
+      <Show when={viewMode() !== "create_snippet"}>
+        <div class="status-bar">
+          <div class="status-left">
+            <span class="status-text">
+              {appCount() > 0 ? `${appCount()} apps indexed` : "Loading..."}
+            </span>
+          </div>
+          <div class="status-right">
+            <div class="status-action">
+              <span class="kbd">↑↓</span>
+              <span class="status-text">Navigate</span>
+            </div>
+            <div class="status-action">
+              <span class="kbd">↵</span>
+              <span class="status-text">Open</span>
+            </div>
+            <div class="status-action">
+              <span class="kbd">Esc</span>
+              <span class="status-text">Close</span>
+            </div>
+          </div>
         </div>
-        <div class="status-right">
-          <div class="status-action">
-            <span class="kbd">↑↓</span>
-            <span class="status-text">Navigate</span>
-          </div>
-          <div class="status-action">
-            <span class="kbd">↵</span>
-            <span class="status-text">Open</span>
-          </div>
-          <div class="status-action">
-            <span class="kbd">Esc</span>
-            <span class="status-text">Close</span>
-          </div>
-        </div>
-      </div>
+      </Show>
     </div>
   );
 }

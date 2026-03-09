@@ -1,0 +1,37 @@
+#!/bin/bash
+# surch2-toggle: Toggle Surch2 launcher visibility
+# Usage: surch2-toggle [show|hide|toggle]
+#
+# Add to your i3 config:
+#   bindsym $mod+space exec ~/personal/projects/surch2/scripts/surch2-toggle
+
+SOCKET="${XDG_RUNTIME_DIR:-/tmp}/surch2.sock"
+CMD="${1:-toggle}"
+
+if [ ! -S "$SOCKET" ]; then
+    echo "Surch2 is not running (no socket at $SOCKET)"
+    exit 1
+fi
+
+# Try socat first, then python, then perl as fallback
+if command -v socat &>/dev/null; then
+    echo "$CMD" | socat - UNIX-CONNECT:"$SOCKET"
+elif command -v python3 &>/dev/null; then
+    python3 -c "
+import socket
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect('$SOCKET')
+s.send(b'$CMD\n')
+s.close()
+"
+elif command -v perl &>/dev/null; then
+    perl -e "
+use IO::Socket::UNIX;
+my \$s = IO::Socket::UNIX->new(Peer => '$SOCKET', Type => SOCK_STREAM) or die;
+print \$s \"$CMD\n\";
+close \$s;
+"
+else
+    echo "No suitable tool found. Install one of: socat, python3"
+    exit 1
+fi

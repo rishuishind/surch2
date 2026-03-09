@@ -3,16 +3,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct AppEntry {
-    pub name: String,
-    pub exec: String,
-    pub icon: Option<String>,
-    pub icon_data: Option<String>,
-    pub description: Option<String>,
-    pub categories: Option<String>,
-    pub desktop_file: String,
-}
+use crate::models::SearchResultItem;
 
 /// Directories to scan for .desktop files
 fn desktop_dirs() -> Vec<PathBuf> {
@@ -41,9 +32,9 @@ fn desktop_dirs() -> Vec<PathBuf> {
 }
 
 /// Parse a .desktop file into an AppEntry
-fn parse_desktop_file(path: &PathBuf) -> Option<AppEntry> {
-    let content = fs::read_to_string(path).ok()?;
-    let entry = freedesktop_entry_parser::parse_entry(&content);
+fn parse_desktop_file(path: &PathBuf) -> Option<SearchResultItem> {
+    // freedesktop_entry_parser::parse_entry takes a file path
+    let entry = freedesktop_entry_parser::parse_entry(path.to_str()?).ok()?;
 
     let section = entry.section("Desktop Entry");
 
@@ -85,20 +76,20 @@ fn parse_desktop_file(path: &PathBuf) -> Option<AppEntry> {
         .trim()
         .to_string();
 
-    let icon = section.attr("Icon").map(|s| s.to_string());
     let description = section.attr("Comment").map(|s| s.to_string());
-    let categories = section.attr("Categories").map(|s| s.to_string());
+    let icon = section.attr("Icon").map(|s| s.to_string());
 
     let icon_data = icon.as_ref().and_then(|icon_name| resolve_icon(icon_name));
 
-    Some(AppEntry {
-        name,
-        exec,
+    Some(SearchResultItem {
+        id: format!("app-{}", name),
+        title: name,
+        subtitle: description,
         icon,
         icon_data,
-        description,
-        categories,
-        desktop_file: path.to_string_lossy().to_string(),
+        item_type: "app".to_string(),
+        action_data: exec,
+        score: 0,
     })
 }
 
@@ -171,8 +162,8 @@ fn read_icon_to_base64(path: &str) -> Option<String> {
 }
 
 /// Scan all .desktop files and return deduplicated AppEntry list
-pub fn scan_applications() -> Vec<AppEntry> {
-    let mut seen: HashMap<String, AppEntry> = HashMap::new();
+pub fn scan_applications() -> Vec<SearchResultItem> {
+    let mut seen: HashMap<String, SearchResultItem> = HashMap::new();
 
     for dir in desktop_dirs() {
         if !dir.exists() {
@@ -185,14 +176,14 @@ pub fn scan_applications() -> Vec<AppEntry> {
                 if path.extension().map_or(false, |ext| ext == "desktop") {
                     if let Some(app) = parse_desktop_file(&path) {
                         // Deduplicate by name (keep first occurrence)
-                        seen.entry(app.name.clone()).or_insert(app);
+                        seen.entry(app.title.clone()).or_insert(app);
                     }
                 }
             }
         }
     }
 
-    let mut apps: Vec<AppEntry> = seen.into_values().collect();
-    apps.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    let mut apps: Vec<SearchResultItem> = seen.into_values().collect();
+    apps.sort_by(|a, b| a.title.to_lowercase().cmp(&b.title.to_lowercase()));
     apps
 }
