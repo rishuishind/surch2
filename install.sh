@@ -55,7 +55,7 @@ mkdir -p "$AUTOSTART_DIR"
 cat <<EOF > "$AUTOSTART_DIR/$APP_NAME.desktop"
 [Desktop Entry]
 Type=Application
-Exec=$INSTALL_DIR/$APP_NAME
+Exec=$INSTALL_DIR/$APP_NAME daemon
 Hidden=false
 NoDisplay=false
 X-GNOME-Autostart-enabled=true
@@ -74,6 +74,9 @@ echo "====================================="
 echo "Important: Make sure $INSTALL_DIR is in your system's PATH."
 echo ""
 echo "To start Surch2 right now, run:"
-echo "  $INSTALL_DIR/$APP_NAME &"
+echo "  $INSTALL_DIR/$APP_NAME daemon &"
 echo ""
-echo "Or find it in your application menu. Once running in the background, press Alt+Space to summon!"
+echo "Or find it in your application menu."
+echo "Once running in the background, press Alt+Space to summon!"
+echo "If Alt+Space does not work (e.g. on Wayland), bind your custom desktop shortcut to:"
+echo "  $INSTALL_DIR/$APP_NAME toggle"

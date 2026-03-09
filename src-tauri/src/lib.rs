@@ -13,8 +13,8 @@ use models::SearchResultItem;
 use system::get_system_commands;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use fuzzy_matcher::FuzzyMatcher;
-use std::io::{BufRead, BufReader};
-use std::os::unix::net::UnixListener;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::Manager;
@@ -328,6 +328,27 @@ fn socket_path() -> String {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    let args: Vec<String> = std::env::args().collect();
+    let sock_path = socket_path();
+    
+    let is_daemon_start = args.iter().any(|a| a == "daemon");
+    let cmd = args.get(1).map(|s| s.as_str()).unwrap_or("");
+
+    if cmd == "toggle" || cmd == "show" || cmd == "hide" {
+        if let Ok(mut stream) = UnixStream::connect(&sock_path) {
+            let _ = writeln!(stream, "{}", cmd);
+        } else {
+            eprintln!("Surch2 is not running in the background.");
+        }
+        std::process::exit(0);
+    } else if !is_daemon_start {
+        // If they just typed `surch2`, and it's already running, toggle it and exit!
+        if let Ok(mut stream) = UnixStream::connect(&sock_path) {
+            let _ = writeln!(stream, "toggle");
+            std::process::exit(0);
+        }
+    }
+
     // Initialize Database
     if let Err(e) = init_db() {
         eprintln!("[Surch2] Failed to initialize database: {}", e);
@@ -351,8 +372,13 @@ pub fn run() {
         .manage(AppState {
             items: Mutex::new(items),
         })
-        .setup(|app| {
+        .setup(move |app| {
             let main_window = app.get_webview_window("main").unwrap();
+
+            if !is_daemon_start {
+                let _ = main_window.show();
+                let _ = main_window.set_focus();
+            }
 
             // ---- Global Shortcut: Alt+Space ----
             {
