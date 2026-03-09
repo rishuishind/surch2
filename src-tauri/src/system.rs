@@ -3,6 +3,16 @@ use crate::models::SearchResultItem;
 pub fn get_system_commands() -> Vec<SearchResultItem> {
     vec![
         SearchResultItem {
+            id: "sys-create-snippet".to_string(),
+            title: "Create Snippet".to_string(),
+            subtitle: Some("Create a new text expansion snippet".to_string()),
+            icon: None,
+            icon_data: None,
+            item_type: "core_command".to_string(),
+            action_data: "switch_view_create_snippet".to_string(),
+            score: 0,
+        },
+        SearchResultItem {
             id: "sys-clipboard".to_string(),
             title: "Clipboard History".to_string(),
             subtitle: Some("Search and paste from clipboard over time".to_string()),

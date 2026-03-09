@@ -1,12 +1,14 @@
 mod apps;
 mod db;
 mod clipboard;
+mod i3;
 mod models;
 mod system;
 
 use apps::scan_applications;
 use clipboard::start_clipboard_monitor;
-use db::{init_db, get_clipboard_history};
+use db::{get_all_snippets, get_clipboard_history, init_db, insert_snippet};
+use i3::get_i3_items;
 use models::SearchResultItem;
 use system::get_system_commands;
 use fuzzy_matcher::skim::SkimMatcherV2;
@@ -42,8 +44,14 @@ fn search_items(query: &str, state: tauri::State<'_, AppState>) -> Vec<SearchRes
                 .and_then(|d| matcher.fuzzy_match(d, query))
                 .unwrap_or(0);
 
-            // Apps get a higher weight on their name
-            let weight = if item.item_type == "app" { 3 } else { 2 };
+            // Weight ranking: apps > snippets > system > i3
+            let weight = if item.item_type == "app" {
+                3
+            } else if item.item_type == "snippet" {
+                2
+            } else {
+                1
+            };
             let total = title_score * weight + subtitle_score;
             
             if total > 0 {
@@ -77,11 +85,14 @@ fn execute_item(item: SearchResultItem) -> Result<(), String> {
             .args(&parts[1..])
             .spawn()
             .map_err(|e| format!("Failed to launch: {}", e))?;
-    } else if item.item_type == "clipboard" {
-        // Paste it! For now, just copy it back to active clipboard so user can paste it.
-        // In the future, we can use xdotool to simulate Ctrl+V.
+    } else if item.item_type == "clipboard" || item.item_type == "snippet" {
+        // Paste it!
         if let Ok(mut clipboard) = arboard::Clipboard::new() {
             let _ = clipboard.set_text(item.action_data);
+        }
+    } else if item.item_type == "i3_command" {
+        if let Ok(mut conn) = i3ipc::I3Connection::connect() {
+            let _ = conn.run_command(&item.action_data);
         }
     }
     
@@ -92,9 +103,19 @@ fn execute_item(item: SearchResultItem) -> Result<(), String> {
 fn refresh_items(state: tauri::State<'_, AppState>) -> usize {
     let mut new_items = scan_applications();
     new_items.extend(get_system_commands());
+    if let Ok(snippets) = get_all_snippets() {
+        new_items.extend(snippets);
+    }
+    new_items.extend(get_i3_items());
     let count = new_items.len();
     *state.items.lock().unwrap() = new_items;
     count
+}
+
+#[tauri::command]
+fn save_snippet(title: String, content: String, keyword: Option<String>) -> Result<(), String> {
+    insert_snippet(&title, &content, keyword.as_deref())
+        .map_err(|e| format!("Failed to save snippet: {}", e))
 }
 
 #[tauri::command]
@@ -318,6 +339,10 @@ pub fn run() {
     // Pre-scan items
     let mut items = scan_applications();
     items.extend(get_system_commands());
+    if let Ok(snippets) = get_all_snippets() {
+        items.extend(snippets);
+    }
+    items.extend(get_i3_items());
     println!("[Surch2] Indexed {} searchable items", items.len());
 
     tauri::Builder::default()
@@ -406,6 +431,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             search_items,
             search_clipboard_history,
+            save_snippet,
             execute_item,
             refresh_items,
             evaluate_math
